@@ -77,34 +77,24 @@ def evaluate(data, X, Y, model, evaluateL2, evaluateL1, batch_size):
     test = None;
 
     for X, Y in data.get_batches(X, Y, batch_size, False):
-        with torch.no_grad():  # 确保在评估时不会计算梯度
-            output = model(X)[:, :9]  # 获取模型前九个维度的输出
-            Y = Y[:, :9]  # 确保目标也只有九个维度
-            if predict is None:
-                predict = output;
-                test = Y;
-            else:
-                predict = torch.cat((predict, output));
-                test = torch.cat((test, Y));
+        output = model(X)[:, :9]  # 获取模型前九个维度的输出
+        Y = Y[:, :9]  # 确保目标也只有九个维度
+        if predict is None:
+            predict = output;
+            test = Y;
+        else:
+            predict = torch.cat((predict, output));
+            test = torch.cat((test, Y));
 
 
 
-        # 循环预测的剩余部分
-        for step in range(1, 5):
-        # 更新输入，将预测的输出置于最后一位置
-            X = torch.roll(X, -1, dims=1)
-            X[:, -1, :9] = output
-            output = model(X)[:, :9]
-            predict = torch.cat((predict, output))
-            test = torch.cat((test, Y))
+        # 切片 data.scale 以匹配前9个维度的输出
+        scale = data.scale[:, :9] if len(data.scale.shape) > 1 else data.scale[:9]
+        scale = scale.expand(output.size(0), 9)  # 确保 scale 张量与 output 的批次大小匹配
 
-            # 计算损失
-            scale = data.scale.expand(output.size(0), -1)[:, :9]  # 确保 scale 张量与 output 的批次大小匹配
-
-            total_loss += evaluateL2(output * scale, Y * scale).data
-            total_loss_l1 += evaluateL1(output * scale, Y * scale).data
-            n_samples += (output.size(0) * output.size(1));
-
+        total_loss += evaluateL2(output * scale, Y * scale).data
+        total_loss_l1 += evaluateL1(output * scale, Y * scale).data
+        n_samples += (output.size(0) * data.original_columns);
     rse = math.sqrt(total_loss / n_samples) / data.rse
     rae = (total_loss_l1 / n_samples) / data.rae
 
@@ -138,21 +128,10 @@ def train(data, X, Y, model, criterion, optim, batch_size):  # X is train set, Y
         scale = scale.expand(output.size(0), 9)  # 确保 scale 张量与 output 的批次大小匹配
 
         loss = criterion(output * scale, Y * scale);
-        # 进行5次循环预测
-        for step in range(5 - 1):  # 已经有了1次初始预测，所以再做4次
-            # 准备下一步的输入
-            X = torch.roll(X, -1, dims=1)  # 将输入向左滚动
-            X[:, -1, :9] = output.detach()  # 使用前一次预测的输出作为新输入的最后一部分
-            # 做出新的预测
-            output = model(X)[:, :9]
-            # 累积损失
-            loss += criterion(output * scale, Y * scale);
-
-        loss /= 5  # 取5步预测的平均损失
         loss.backward();
         grad_norm = optim.step();
         total_loss += loss.data;
-        n_samples += (output.size(0) * output.size(1));
+        n_samples += (output.size(0) * data.original_columns);
     return total_loss / n_samples
     return 1
 
